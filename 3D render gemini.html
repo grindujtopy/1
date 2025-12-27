@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>High-End WebGL Benchmark Demo</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+        #ui {
+            position: absolute; top: 20px; left: 20px; color: rgba(255, 255, 255, 0.8);
+            pointer-events: none; text-shadow: 0 0 10px rgba(0,0,0,0.5);
+            background: rgba(0, 0, 0, 0.2); padding: 15px; border-radius: 8px;
+            backdrop-filter: blur(5px); border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        h1 { margin: 0 0 5px 0; font-size: 1.2rem; letter-spacing: 1px; text-transform: uppercase; }
+        p { margin: 0; font-size: 0.8rem; color: #aaa; }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; font-size: 1.5rem; letter-spacing: 3px; transition: opacity 0.5s;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loading">INICJALIZACJA SILNIKA...</div>
+    <div id="ui">
+        <h1>Quantum Core Demo</h1>
+        <p>Rendering: WebGL 2.0 + PBR</p>
+        <p>Post-Processing: Unreal Bloom + ACES Filmic</p>
+        <p>Objects: 3000 Dynamic Instances</p>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        // --- KONFIGURACJA SCENY ---
+        const scene = new THREE.Scene();
+        // Ciemna, elegancka mgła dla głębi
+        scene.fog = new THREE.FogExp2(0x050505, 0.02);
+        scene.background = new THREE.Color(0x050505);
+
+        // --- KAMERA ---
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 5, 15);
+
+        // --- RENDERER (Wysoka jakość) ---
+        const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        // Ograniczamy PixelRatio do 2 dla wydajności na ekranach Retina/4K
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        // Kluczowe dla realizmu:
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.0;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        // --- KONTROLA UI ---
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 0.5;
+
+        // --- OŚWIETLENIE (STUDYJNE) ---
+        const ambientLight = new THREE.AmbientLight(0x222222);
+        scene.add(ambientLight);
+
+        // Główne światło rzucające cienie
+        const dirLight = new THREE.DirectionalLight(0xffffff, 2);
+        dirLight.position.set(5, 10, 7);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048; // Wysoka jakość cieni
+        dirLight.shadow.mapSize.height = 2048;
+        scene.add(dirLight);
+
+        // Kolorowe światła punktowe dla efektu "Cyberpunk"
+        const pointLight1 = new THREE.PointLight(0x0088ff, 100, 50);
+        pointLight1.position.set(-5, 2, -5);
+        scene.add(pointLight1);
+
+        const pointLight2 = new THREE.PointLight(0xff0044, 100, 50);
+        pointLight2.position.set(5, -2, 5);
+        scene.add(pointLight2);
+
+        // --- OBIEKTY (INSTANCED MESH - WYDAJNOŚĆ) ---
+        // Tworzymy 3000 sześcianów, ale renderujemy je jako jeden obiekt GPU
+        const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+        // Materiał PBR: Metaliczny, szorstki, realistyczny
+        const material = new THREE.MeshPhysicalMaterial({
+            color: 0x111111,
+            metalness: 0.9,
+            roughness: 0.2,
+            clearcoat: 1.0,
+            clearcoatRoughness: 0.1,
+        });
+
+        const count = 3000;
+        const mesh = new THREE.InstancedMesh(geometry, material, count);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+
+        const dummy = new THREE.Object3D();
+        const positions = [];
+        const speeds = [];
+
+        // Generowanie pozycji w torusie/pierścieniu
+        for (let i = 0; i < count; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const radius = 4 + Math.random() * 6;
+            const x = Math.cos(angle) * radius;
+            const y = (Math.random() - 0.5) * 6;
+            const z = Math.sin(angle) * radius;
+            
+            dummy.position.set(x, y, z);
+            dummy.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
+            dummy.updateMatrix();
+            mesh.setMatrixAt(i, dummy.matrix);
+
+            positions.push({ x, y, z, angle, radius, speed: (Math.random() * 0.02) + 0.005 });
+            speeds.push((Math.random() - 0.5) * 0.02);
+        }
+        scene.add(mesh);
+
+        // Centralny "Rdzeń"
+        const coreGeo = new THREE.IcosahedronGeometry(2, 0);
+        const coreMat = new THREE.MeshStandardMaterial({ 
+            color: 0x000000, 
+            emissive: 0x0044ff,
+            emissiveIntensity: 2,
+            wireframe: true
+        });
+        const core = new THREE.Mesh(coreGeo, coreMat);
+        scene.add(core);
+
+        const coreInner = new THREE.Mesh(
+            new THREE.IcosahedronGeometry(1.5, 4),
+            new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0, metalness: 1 })
+        );
+        scene.add(coreInner);
+
+        // --- POST-PROCESSING (EFEKTY FILMOWE) ---
+        const renderScene = new RenderPass(scene, camera);
+
+        // Unreal Bloom - piękna poświata
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0.2; // Tylko jasne elementy świecą
+        bloomPass.strength = 1.2;  // Intensywność
+        bloomPass.radius = 0.5;    // Rozmycie
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+
+        // --- ANIMACJA I LOGIKA ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = clock.getElapsedTime();
+            const delta = clock.getDelta();
+
+            controls.update();
+
+            // Animacja centralnego rdzenia
+            core.rotation.y = time * 0.2;
+            core.rotation.z = time * 0.1;
+            core.material.emissiveIntensity = 2 + Math.sin(time * 3) * 1; // Pulsowanie
+            coreInner.rotation.x -= 0.01;
+            
+            // Animacja świateł
+            pointLight1.position.x = Math.sin(time * 0.5) * 10;
+            pointLight1.position.z = Math.cos(time * 0.5) * 10;
+
+            // Animacja tysięcy instancji (aktualizacja macierzy)
+            for (let i = 0; i < count; i++) {
+                const data = positions[i];
+                
+                // Ruch po okręgu
+                data.angle += data.speed;
+                const x = Math.cos(data.angle) * data.radius;
+                const z = Math.sin(data.angle) * data.radius;
+                
+                dummy.position.set(x, data.y + Math.sin(time + i) * 0.5, z); // Falowanie góra/dół
+                
+                // Rotacja własna klocków
+                dummy.rotation.x += speeds[i] * 5;
+                dummy.rotation.y += speeds[i] * 5;
+                
+                dummy.updateMatrix();
+                mesh.setMatrixAt(i, dummy.matrix);
+            }
+            mesh.instanceMatrix.needsUpdate = true;
+
+            // Renderowanie przez Composer (z efektami)
+            composer.render();
+        }
+
+        // --- OBSŁUGA ZMIANY ROZMIARU OKNA ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Ukryj loading screen po załadowaniu
+        document.getElementById('loading').style.opacity = 0;
+        setTimeout(() => document.getElementById('loading').style.display = 'none', 500);
+
+        animate();
+    </script>
+</body>
+</html>
